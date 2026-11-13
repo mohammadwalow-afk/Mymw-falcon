@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mymw Falcon</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a121e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  body { font-family: sans-serif; background:#101418; color:#e8e8e8; margin:0; padding:16px; }
+  .brand { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+  .brand img { width:64px; height:64px; border-radius:14px; }
+  h1 { color:#ffc107; font-size:22px; margin:0 0 4px; }
+  p.sub { color:#9aa; margin:0; font-size:13px; }
+  .run.alt { background:#2a323b; color:#e8e8e8; margin-inline-start:8px; }
+  textarea { width:100%; height:330px; box-sizing:border-box; background:#1b2128; color:#fff;
+             border:1px solid #333; border-radius:10px; padding:10px; font-family:monospace; font-size:14px; direction:ltr; text-align:left; }
+  .run { background:#ffc107; color:#000; border:0; border-radius:10px; padding:12px 22px;
+         font-size:16px; font-weight:bold; margin:10px 0; }
+  .err { background:#4a1c1c; color:#ffb4b4; padding:10px; border-radius:10px; margin:8px 0; direction:ltr; text-align:left; }
+  h3 { color:#9aa; font-size:14px; margin:14px 0 4px; }
+  pre { background:#0b0e11; padding:12px; border-radius:10px; overflow-x:auto; min-height:40px; direction:ltr; text-align:left;
+        font-size:14px; line-height:1.6; color:#c3e88d; margin:0; white-space:pre-wrap; }
+  /* منطقة الواجهة التي تبنيها لغتك */
+  #ui { background:#181d23; border:1px solid #2a323b; border-radius:12px; padding:14px; text-align:center; min-height:60px; }
+  #ui h2 { margin:6px 0; }
+  #ui p { margin:8px 0; }
+  #ui button { padding:10px 20px; margin:5px; border:0; border-radius:8px; font-size:15px; font-weight:bold; cursor:pointer; background:#ffc107; color:#000; }
+  #ui input { padding:12px; width:70%; margin:6px; border-radius:8px; border:0; font-size:16px; background:#222; color:#fff; }
+  #ui img { max-width:90%; border-radius:14px; margin:8px 0; }
+</style>
+</head>
+<body>
+<div class="brand"><img src="icon-192.png" alt="Mymw Falcon"><div><h1>Mymw Falcon</h1>
+<p class="sub">لغة برمجة عربية لبناء تطبيقات تفاعلية</p></div></div>
+
+<textarea id="src">// تطبيق صغير بلغة Mymw Falcon
+title("🦅 تطبيق العدّاد", "text:gold")
+label("العدد", "العدد: 0", "text:#fff,font-size:24px")
+
+let عدد = 0
+task زيادة() {
+  عدد = عدد + 1
+  set("العدد", "العدد: " + عدد)
+}
+task تصفير() {
+  عدد = 0
+  set("العدد", "العدد: 0")
+}
+button("➕ زيادة", زيادة, "bg:#00E676,text:black")
+button("🔄 تصفير", تصفير, "bg:#2979FF,text:white")
+
+text("اكتب اسمك:")
+input("اسم", "اسمك هنا...")
+task ترحيب() {
+  let م = read("اسم")
+  set("رد", "أهلاً " + م + " 👋")
+  speak("أهلاً " + م)
+}
+button("🔊 رحّب بي", ترحيب, "bg:#6200EA,text:white")
+label("رد", "")
+
+image("A white albatross flying over the sea at sunset")</textarea>
+<br>
+<button class="run" onclick="runProgram()">▶ شغّل</button><button class="run alt" onclick="resetSample()">↺ المثال الأصلي</button>
+<div id="err"></div>
+<h3>الواجهة:</h3>
+<div id="ui"></div>
+<h3>المخرجات (print):</h3>
+<pre id="out"></pre>
+
+<script>
+// حفظ الكود تلقائياً في متصفح هاتفك (localStorage) حتى لا يضيع عند إغلاق التطبيق
+const KEY = "mymw-falcon-code";
+const srcBox = document.getElementById("src");
+const DEFAULT_SRC = srcBox.defaultValue;
+try { const saved = localStorage.getItem(KEY); if (saved) srcBox.value = saved; } catch (e) {}
+srcBox.addEventListener("input", () => { try { localStorage.setItem(KEY, srcBox.value); } catch (e) {} });
+function resetSample() { srcBox.value = DEFAULT_SRC; try { localStorage.removeItem(KEY); } catch (e) {} runProgram(); }
+</script>
+<script>
+// ============================================================
+//  الجزء 1: Lexer (نفس المرحلة السابقة)
+// ============================================================
+const KEYWORDS = new Set(["let","if","else","loop","while","task","return","true","false","null","and","or","not"]);
+const OPERATORS = ["==","!=",">=","<=","->","+","-","*","/","%","=",">","<"];
+const PUNCTUATION = new Set(["(",")","{","}","[","]",",",":",";","."]);
+
+class FalconError extends Error {
+  constructor(message, line, col) {
+    super(`خطأ في السطر ${line}، العمود ${col}: ${message}`);
+    this.line = line; this.col = col;
+  }
+}
+// \p{M} = علامات التشكيل (شدّة، فتحة...) وهي ليست "حرفاً" لكنها جزء من الكلمة العربية
+const isLetter = ch => /[\p{L}\p{M}_]/u.test(ch);
+const isDigit  = ch => ch >= "0" && ch <= "9";
+
+function tokenize(code) {
+  const tokens = [];
+  let i = 0, line = 1, col = 1;
+  const advance = () => { const ch = code[i++]; if (ch === "\n") { line++; col = 1; } else { col++; } return ch; };
+  const add = (type, value, l, c) => tokens.push({ type, value, line: l, col: c });
+
+  while (i < code.length) {
+    const ch = code[i];
+    const sl = line, sc = col;
+    if (ch === " " || ch === "\t" || ch === "\r") { advance(); continue; }
+    if (ch === "\n") { advance(); add("NEWLINE", "\\n", sl, sc); continue; }
+    if (ch === "/" && code[i + 1] === "/") { while (i < code.length && code[i] !== "\n") advance(); continue; }
+    if (isDigit(ch)) {
+      let num = "";
+      while (i < code.length && isDigit(code[i])) num += advance();
+      if (code[i] === "." && isDigit(code[i + 1])) { num += advance(); while (i < code.length && isDigit(code[i])) num += advance(); }
+      add("NUMBER", Number(num), sl, sc); continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const quote = advance(); let str = "";
+      while (i < code.length && code[i] !== quote) {
+        if (code[i] === "\n") throw new FalconError("النص لم يُغلق قبل نهاية السطر", sl, sc);
+        if (code[i] === "\\") { advance(); const e = advance(); str += e === "n" ? "\n" : e === "t" ? "\t" : e; }
+        else str += advance();
+      }
+      if (i >= code.length) throw new FalconError("النص لم يُغلق", sl, sc);
+      advance(); add("STRING", str, sl, sc); continue;
+    }
+    if (isLetter(ch)) {
+      let w = "";
+      while (i < code.length && (isLetter(code[i]) || isDigit(code[i]))) w += advance();
+      add(KEYWORDS.has(w) ? "KEYWORD" : "IDENT", w, sl, sc); continue;
+    }
+    const op = OPERATORS.find(o => code.startsWith(o, i));
+    if (op) { for (let k = 0; k < op.length; k++) advance(); add("OP", op, sl, sc); continue; }
+    if (PUNCTUATION.has(ch)) { advance(); add("PUNC", ch, sl, sc); continue; }
+    throw new FalconError(`رمز غير معروف '${ch}'`, sl, sc);
+  }
+  add("EOF", "", line, col);
+  return tokens;
+}
+
+// ============================================================
+//  الجزء 2: Parser
+//  الفكرة: نقرأ الرموز ونبني شجرة. كل عقدة في الشجرة لها type.
+//  اسم الطريقة = اسم القاعدة في اللغة، وكل قاعدة تستدعي الأعلى أولوية منها.
+//  ترتيب الأولوية (من الأضعف للأقوى):
+//     or  <  and  <  == !=  <  > < >= <=  <  + -  <  * / %  <  unary  <  call  <  primary
+//  الأضعف يُستدعى أولاً، فيصير في أعلى الشجرة (يُنفَّذ أخيراً).
+// ============================================================
+class Parser {
+  constructor(tokens) { this.t = tokens; this.p = 0; }
+
+  // ---------- أدوات مساعدة ----------
+  peek() { return this.t[this.p]; }                 // الرمز الحالي بدون تقدّم
+  next() { return this.t[this.p++]; }               // الرمز الحالي مع التقدّم
+  check(type, value) {                              // هل الرمز الحالي من هذا النوع؟
+    const k = this.peek();
+    return k.type === type && (value === undefined || k.value === value);
+  }
+  match(type, value) { return this.check(type, value) ? this.next() : null; }  // إن طابق نتقدّم
+  expect(type, value) {                             // لازم يطابق وإلا خطأ واضح
+    if (this.check(type, value)) return this.next();
+    const k = this.peek();
+    const found = k.type === "EOF" ? "نهاية الملف" : k.type === "NEWLINE" ? "سطر جديد" : `'${k.value}'`;
+    throw new FalconError(`كنت أتوقع '${value || type}' لكن وجدت ${found}`, k.line, k.col);
+  }
+  skipNewlines() { while (this.check("NEWLINE")) this.next(); }
+
+  // كل أمر لازم ينتهي بسطر جديد (أو نهاية الملف أو })
+  endStatement() {
+    if (this.check("EOF") || this.check("PUNC", "}")) return;
+    if (!this.check("NEWLINE")) {
+      const k = this.peek();
+      throw new FalconError(`الأمر يجب أن ينتهي بسطر جديد، وجدت '${k.value}'`, k.line, k.col);
+    }
+    this.skipNewlines();
+  }
+
+  // ---------- البرنامج والكتل ----------
+  parseProgram() {
+    const body = [];
+    this.skipNewlines();
+    while (!this.check("EOF")) { body.push(this.statement()); this.endStatement(); }
+    return { type: "Program", body };
+  }
+
+  block() {                                          // { أوامر ... }
+    this.expect("PUNC", "{");
+    this.skipNewlines();
+    const body = [];
+    while (!this.check("PUNC", "}")) {
+      if (this.check("EOF")) { const k = this.peek(); throw new FalconError("القوس } مفقود", k.line, k.col); }
+      body.push(this.statement());
+      this.endStatement();
+    }
+    this.expect("PUNC", "}");
+    return { type: "Block", body };
+  }
+
+  // ---------- الأوامر ----------
+  statement() {                                      // يسجّل رقم السطر ثم ينفّذ القاعدة
+    const line = this.peek().line;
+    const s = this.statementInner();
+    s.line = line;
+    return s;
+  }
+
+  statementInner() {
+    if (this.match("KEYWORD", "let")) {              // let x = قيمة
+      const name = this.expect("IDENT").value;
+      this.expect("OP", "=");
+      return { type: "Let", name, value: this.expression() };
+    }
+    if (this.check("KEYWORD", "if")) return this.ifStatement();
+    if (this.match("KEYWORD", "loop")) {             // loop 3 { ... }
+      const count = this.expression();
+      return { type: "Loop", count, body: this.block() };
+    }
+    if (this.match("KEYWORD", "while")) {            // while شرط { ... }
+      const cond = this.expression();
+      return { type: "While", cond, body: this.block() };
+    }
+    if (this.match("KEYWORD", "task")) {             // task اسم(معاملات) { ... }
+      const name = this.expect("IDENT").value;
+      this.expect("PUNC", "(");
+      const params = [];
+      if (!this.check("PUNC", ")")) {
+        do { params.push(this.expect("IDENT").value); } while (this.match("PUNC", ","));
+      }
+      this.expect("PUNC", ")");
+      return { type: "Task", name, params, body: this.block() };
+    }
+    if (this.match("KEYWORD", "return")) {
+      const endsHere = this.check("NEWLINE") || this.check("EOF") || this.check("PUNC", "}");
+      return { type: "Return", value: endsHere ? null : this.expression() };
+    }
+    // تعيين: x = قيمة   (اسم ثم =)
+    const nxt = this.t[this.p + 1];
+    if (this.check("IDENT") && nxt && nxt.type === "OP" && nxt.value === "=") {
+      const name = this.next().value; this.next();
+      return { type: "Assign", name, value: this.expression() };
+    }
+    return { type: "ExprStatement", expr: this.expression() };   // مثل print(x)
+  }
+
+  ifStatement() {
+    this.expect("KEYWORD", "if");
+    const cond = this.expression();
+    const then = this.block();
+    let otherwise = null;
+    if (this.match("KEYWORD", "else")) {
+      otherwise = this.check("KEYWORD", "if") ? this.ifStatement() : this.block();   // else if
+    }
+    return { type: "If", cond, then, else: otherwise };
+  }
+
+  // ---------- التعابير (حسب الأولوية) ----------
+  expression() { return this.orExpr(); }
+
+  orExpr() {
+    let left = this.andExpr();
+    while (this.match("KEYWORD", "or")) left = { type: "Logical", op: "or", left, right: this.andExpr() };
+    return left;
+  }
+  andExpr() {
+    let left = this.equality();
+    while (this.match("KEYWORD", "and")) left = { type: "Logical", op: "and", left, right: this.equality() };
+    return left;
+  }
+  // دالة عامة لكل مستوى عمليات ثنائية: تقرأ يسار، ثم (عملية + يمين) طالما وُجدت
+  binary(nextLevel, ops) {
+    let left = nextLevel.call(this);
+    while (this.check("OP") && ops.includes(this.peek().value)) {
+      const op = this.next().value;
+      const right = nextLevel.call(this);
+      left = { type: "Binary", op, left, right };
+    }
+    return left;
+  }
+  equality()   { return this.binary(this.comparison, ["==", "!="]); }
+  comparison() { return this.binary(this.term, [">", "<", ">=", "<="]); }
+  term()       { return this.binary(this.factor, ["+", "-"]); }
+  factor()     { return this.binary(this.unary, ["*", "/", "%"]); }
+
+  unary() {
+    if (this.check("OP", "-")) { this.next(); return { type: "Unary", op: "-", arg: this.unary() }; }
+    if (this.match("KEYWORD", "not")) return { type: "Unary", op: "not", arg: this.unary() };
+    return this.call();
+  }
+
+  call() {                                           // اسم(معاملات)  أو  قائمة[فهرس]
+    let e = this.primary();
+    while (true) {
+      if (e.type === "Identifier" && this.check("PUNC", "(")) {
+        this.next();
+        const args = [];
+        if (!this.check("PUNC", ")")) {
+          do { args.push(this.expression()); } while (this.match("PUNC", ","));
+        }
+        this.expect("PUNC", ")");
+        e = { type: "Call", callee: e.name, args };
+      } else if (this.check("PUNC", "[")) {
+        this.next();
+        const index = this.expression();
+        this.expect("PUNC", "]");
+        e = { type: "Index", target: e, index };
+      } else break;
+    }
+    return e;
+  }
+
+  primary() {                                        // أصغر وحدة: رقم، نص، اسم، ( ... )، [ ... ]
+    const k = this.peek();
+    if (k.type === "NUMBER") { this.next(); return { type: "Number", value: k.value }; }
+    if (k.type === "STRING") { this.next(); return { type: "String", value: k.value }; }
+    if (k.type === "KEYWORD" && (k.value === "true" || k.value === "false")) { this.next(); return { type: "Boolean", value: k.value === "true" }; }
+    if (k.type === "KEYWORD" && k.value === "null") { this.next(); return { type: "Null" }; }
+    if (k.type === "IDENT") { this.next(); return { type: "Identifier", name: k.value }; }
+    if (this.match("PUNC", "(")) {
+      const e = this.expression();
+      this.expect("PUNC", ")");
+      return e;
+    }
+    if (this.match("PUNC", "[")) {
+      const items = [];
+      if (!this.check("PUNC", "]")) {
+        do { items.push(this.expression()); } while (this.match("PUNC", ","));
+      }
+      this.expect("PUNC", "]");
+      return { type: "List", items };
+    }
+    const found = k.type === "EOF" ? "نهاية الملف" : k.type === "NEWLINE" ? "سطر جديد" : `'${k.value}'`;
+    throw new FalconError(`تعبير غير متوقع: وجدت ${found}`, k.line, k.col);
+  }
+}
+
+function parse(code) { return new Parser(tokenize(code)).parseProgram(); }
+
+
+// ============================================================
+//  الجزء 3: Interpreter
+//  الفكرة: نمشي على الشجرة (AST) ونُنفّذ كل عقدة.
+//   - exec(node)  ينفّذ "أمراً" (let, if, loop ...) ولا يرجع قيمة
+//   - eval(node)  يحسب "تعبيراً" (2 + 3, اسم, استدعاء ...) ويرجع قيمة
+//  المتغيرات تعيش في "نطاقات" (Env) متداخلة: كل كتلة { } نطاق جديد.
+// ============================================================
+
+// إشارة خاصة: return ترمي هذا الكائن، والدالة المستدعاة تلتقطه
+class ReturnSignal { constructor(value) { this.value = value; } }
+
+class FalconRuntimeError extends Error {
+  constructor(message, line) {
+    super(line ? `خطأ تشغيل في السطر ${line}: ${message}` : `خطأ تشغيل: ${message}`);
+    this.line = line;
+  }
+}
+
+// نطاق المتغيرات: جدول أسماء + رابط للنطاق الأب
+class Env {
+  constructor(parent = null) { this.vars = new Map(); this.parent = parent; }
+  define(name, value) { this.vars.set(name, value); }
+  find(name) {                       // يرجع النطاق الذي فيه الاسم (أو null)
+    let e = this;
+    while (e) { if (e.vars.has(name)) return e; e = e.parent; }
+    return null;
+  }
+}
+
+const MAX_STEPS = 500000;   // حماية: حتى لا تعلّق الحلقة اللانهائية الهاتف
+const MAX_DEPTH = 200;      // حماية: حد عمق استدعاء الدوال
+
+class Interpreter {
+  constructor(output, ui = null, onError = null) {
+    this.out = output;        // دالة تستقبل كل سطر مطبوع
+    this.ui = ui;             // جسر الواجهة (اختياري)
+    this.onError = onError;   // لعرض أخطاء أحداث الأزرار
+    this.line = 0;            // آخر سطر وصلنا له (لرسائل الأخطاء)
+    this.steps = 0;
+    this.depth = 0;
+    this.globals = new Env();
+    this.installBuiltins();
+    if (this.ui) this.installUI();
+  }
+
+  fail(msg) { throw new FalconRuntimeError(msg, this.line); }
+  tick() { if (++this.steps > MAX_STEPS) this.fail("تجاوزت حد التنفيذ (هل عندك حلقة لا نهائية؟)"); }
+
+  // ---------- أدوات القيم ----------
+  typeName(v) {
+    if (v === null) return "null";
+    if (Array.isArray(v)) return "قائمة";
+    if (typeof v === "number") return "رقم";
+    if (typeof v === "string") return "نص";
+    if (typeof v === "boolean") return "منطقي";
+    return "دالة";
+  }
+  show(v) {                                   // تحويل أي قيمة لنص للعرض
+    if (v === null) return "null";
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (Array.isArray(v)) return "[" + v.map(x => typeof x === "string" ? JSON.stringify(x) : this.show(x)).join(", ") + "]";
+    if (typeof v === "object") return `<دالة ${v.name}>`;
+    return String(v);
+  }
+  truthy(v) { return !(v === null || v === false || v === 0 || v === ""); }
+  equal(a, b) {
+    if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => this.equal(x, b[i]));
+    return a === b;
+  }
+
+  // ---------- الدوال الجاهزة ----------
+  installBuiltins() {
+    const g = this.globals;
+    const native = (name, fn) => g.define(name, { kind: "native", name, fn });
+    native("print", args => { this.out(args.map(a => this.show(a)).join(" ")); return null; });
+    native("len", ([x]) => {
+      if (Array.isArray(x) || typeof x === "string") return x.length;
+      this.fail("len تعمل مع القوائم والنصوص فقط");
+    });
+    native("str", ([x]) => this.show(x));
+    native("num", ([x]) => {
+      const n = Number(x);
+      if (x === "" || Number.isNaN(n)) this.fail(`لا يمكن تحويل ${this.show(x)} إلى رقم`);
+      return n;
+    });
+    native("push", ([list, item]) => {
+      if (!Array.isArray(list)) this.fail("push تحتاج قائمة كأول معامل");
+      list.push(item); return list;
+    });
+    native("type", ([x]) => this.typeName(x));
+  }
+
+  // ---------- دوال الواجهة (تُضاف فقط عند وجود واجهة) ----------
+  // كل عنصر واجهة هو دالة عادية في لغتك: title("..."), button("...", مهمة) ...
+  // المعامل الأخير (اختياري) نص ستايل مثل "bg:#222,text:white"
+  installUI() {
+    const g = this.globals, ui = this.ui;
+    const native = (name, fn) => g.define(name, { kind: "native", name, fn });
+    const txt = v => this.show(v);
+    const opt = v => (v === undefined || v === null) ? "" : String(v);
+
+    native("title", ([t, st]) => { ui.title(txt(t), opt(st)); return null; });
+    native("text", ([t, st]) => { ui.text(txt(t), opt(st)); return null; });
+    native("label", ([name, t, st]) => { ui.label(txt(name), txt(t), opt(st)); return null; });
+    native("set", ([name, t]) => {
+      if (!ui.set(txt(name), txt(t))) this.fail(`لا يوجد label باسم '${txt(name)}'`);
+      return null;
+    });
+    native("input", ([name, ph, st]) => { ui.input(txt(name), opt(ph), opt(st)); return null; });
+    native("read", ([name]) => {
+      const v = ui.read(txt(name));
+      if (v === null) this.fail(`لا يوجد حقل input باسم '${txt(name)}'`);
+      return v;
+    });
+    native("button", ([t, fn, st]) => {
+      if (!fn || fn.kind !== "task" || fn.params.length !== 0) this.fail("button تحتاج اسم task بلا معاملات كمعامل ثانٍ");
+      ui.button(txt(t), () => this.invoke(fn), opt(st));
+      return null;
+    });
+    native("image", ([prompt, st]) => { ui.image(txt(prompt), opt(st)); return null; });
+    native("speak", ([t]) => { ui.speak(txt(t)); return null; });
+    native("clear", () => { ui.clear(); return null; });
+  }
+
+  // يُستدعى عند ضغط زر: ينفّذ المهمة المرتبطة به
+  invoke(fn) {
+    this.steps = 0; this.depth = 0;
+    if (this.onError) this.onError(null);          // نمسح الخطأ القديم
+    try { this.callFn(fn, []); }
+    catch (e) { if (this.onError) this.onError(e); else throw e; }
+  }
+
+  // ---------- تشغيل البرنامج ----------
+  run(ast) {
+    try { this.execBlock(ast.body, this.globals); }
+    catch (e) {
+      if (e instanceof ReturnSignal) this.fail("return لا تُستخدم إلا داخل task");
+      throw e;
+    }
+  }
+  execBlock(stmts, env) { for (const s of stmts) this.exec(s, env); }
+
+  // ---------- تنفيذ الأوامر ----------
+  exec(node, env) {
+    this.tick();
+    if (node.line) this.line = node.line;
+    switch (node.type) {
+      case "Let":
+        env.define(node.name, this.eval(node.value, env));
+        break;
+      case "Assign": {
+        const scope = env.find(node.name);
+        if (!scope) this.fail(`المتغير '${node.name}' غير معرّف، استخدم let أولاً`);
+        scope.vars.set(node.name, this.eval(node.value, env));
+        break;
+      }
+      case "ExprStatement":
+        this.eval(node.expr, env);
+        break;
+      case "If":
+        if (this.truthy(this.eval(node.cond, env))) {
+          this.execBlock(node.then.body, new Env(env));
+        } else if (node.else) {
+          if (node.else.type === "If") this.exec(node.else, env);          // else if
+          else this.execBlock(node.else.body, new Env(env));
+        }
+        break;
+      case "Loop": {
+        const n = this.eval(node.count, env);
+        if (typeof n !== "number" || !Number.isInteger(n) || n < 0) this.fail("عدد التكرار يجب أن يكون رقماً صحيحاً غير سالب");
+        for (let i = 0; i < n; i++) { this.tick(); this.execBlock(node.body.body, new Env(env)); }
+        break;
+      }
+      case "While":
+        while (this.truthy(this.eval(node.cond, env))) { this.tick(); this.execBlock(node.body.body, new Env(env)); }
+        break;
+      case "Task":
+        env.define(node.name, { kind: "task", name: node.name, params: node.params, body: node.body, closure: env });
+        break;
+      case "Return":
+        throw new ReturnSignal(node.value ? this.eval(node.value, env) : null);
+      default:
+        this.fail("أمر غير معروف: " + node.type);
+    }
+  }
+
+  // ---------- حساب التعابير ----------
+  eval(n, env) {
+    switch (n.type) {
+      case "Number": case "String": case "Boolean": return n.value;
+      case "Null": return null;
+      case "Identifier": {
+        const scope = env.find(n.name);
+        if (!scope) this.fail(`المتغير '${n.name}' غير معرّف`);
+        return scope.vars.get(n.name);
+      }
+      case "List": return n.items.map(i => this.eval(i, env));
+      case "Index": {
+        const t = this.eval(n.target, env), i = this.eval(n.index, env);
+        if (!Array.isArray(t) && typeof t !== "string") this.fail("الفهرسة تعمل مع القوائم والنصوص فقط");
+        if (!Number.isInteger(i) || i < 0 || i >= t.length) this.fail(`الفهرس ${this.show(i)} خارج الحدود (الطول ${t.length})`);
+        return t[i];
+      }
+      case "Unary": {
+        const v = this.eval(n.arg, env);
+        if (n.op === "not") return !this.truthy(v);
+        if (typeof v !== "number") this.fail(`لا يمكن وضع - قبل ${this.typeName(v)}`);
+        return -v;
+      }
+      case "Logical": {                        // and / or بنمط "الدائرة القصيرة"
+        const l = this.eval(n.left, env);
+        if (n.op === "or") return this.truthy(l) ? l : this.eval(n.right, env);
+        return this.truthy(l) ? this.eval(n.right, env) : l;
+      }
+      case "Binary": return this.binary(n.op, this.eval(n.left, env), this.eval(n.right, env));
+      case "Call": return this.call(n, env);
+      default: this.fail("تعبير غير معروف: " + n.type);
+    }
+  }
+
+  binary(op, a, b) {
+    if (op === "==") return this.equal(a, b);
+    if (op === "!=") return !this.equal(a, b);
+    if (op === "+") {
+      if (typeof a === "number" && typeof b === "number") return a + b;
+      if (typeof a === "string" || typeof b === "string") return this.show(a) + this.show(b);
+      if (Array.isArray(a) && Array.isArray(b)) return a.concat(b);
+      this.fail(`لا يمكن جمع ${this.typeName(a)} مع ${this.typeName(b)}`);
+    }
+    if (op === ">" || op === "<" || op === ">=" || op === "<=") {
+      const ok = (typeof a === "number" && typeof b === "number") || (typeof a === "string" && typeof b === "string");
+      if (!ok) this.fail(`لا يمكن مقارنة ${this.typeName(a)} مع ${this.typeName(b)}`);
+      return op === ">" ? a > b : op === "<" ? a < b : op === ">=" ? a >= b : a <= b;
+    }
+    // - * / %  أرقام فقط
+    if (typeof a !== "number" || typeof b !== "number") this.fail(`العملية ${op} تحتاج رقمين، وجدت ${this.typeName(a)} و${this.typeName(b)}`);
+    if ((op === "/" || op === "%") && b === 0) this.fail("القسمة على صفر");
+    return op === "-" ? a - b : op === "*" ? a * b : op === "/" ? a / b : a % b;
+  }
+
+  call(n, env) {
+    const scope = env.find(n.callee);
+    if (!scope) this.fail(`الدالة '${n.callee}' غير معرّفة`);
+    const fn = scope.vars.get(n.callee);
+    if (!fn || typeof fn !== "object" || Array.isArray(fn)) this.fail(`'${n.callee}' ليست دالة`);
+    const args = n.args.map(a => this.eval(a, env));
+    return this.callFn(fn, args);
+  }
+
+  // تنفيذ دالة (جاهزة أو task) بمعاملات جاهزة؛ تُستخدم أيضاً لأحداث الأزرار
+  callFn(fn, args) {
+    const callLine = this.line;
+    if (fn.kind === "native") return fn.fn(args);
+
+    if (args.length !== fn.params.length) this.fail(`الدالة '${fn.name}' تحتاج ${fn.params.length} معامل لكن أعطيتها ${args.length}`);
+    if (++this.depth > MAX_DEPTH) { this.depth = 0; this.fail("عمق الاستدعاء كبير جداً (استدعاء ذاتي بلا نهاية؟)"); }
+    const local = new Env(fn.closure);
+    fn.params.forEach((p, i) => local.define(p, args[i]));
+    try {
+      this.execBlock(fn.body.body, local);
+      return null;                                  // دالة بدون return ترجع null
+    } catch (e) {
+      if (e instanceof ReturnSignal) return e.value;
+      throw e;
+    } finally {
+      this.depth = Math.max(0, this.depth - 1);
+      this.line = callLine;
+    }
+  }
+}
+
+// ============================================================
+//  الجزء 4: طبقة الواجهة (DomUI) + التشغيل
+//  DomUI هي الجسر بين لغتك وعناصر الصفحة الحقيقية (DOM).
+//  نستخدم textContent دائماً (وليس innerHTML) حتى لا يُحقن كود غريب في الصفحة.
+// ============================================================
+class DomUI {
+  constructor(root) { this.root = root; this.inputs = new Map(); this.labels = new Map(); }
+  clear() { this.root.innerHTML = ""; this.inputs.clear(); this.labels.clear(); }
+
+  // يطبّق الستايل ثم يضيف العنصر للصفحة. صيغة الستايل: "bg:#222,text:white,font-size:20px"
+  add(el, style) {
+    if (style) {
+      const parts = style.split(/[;,]\s*(?=[a-zA-Z-]+\s*:)/)
+        .map(p => p.trim()).filter(Boolean)
+        .map(p => p.startsWith("bg:") ? "background:" + p.slice(3)
+                : p.startsWith("text:") ? "color:" + p.slice(5) : p);
+      el.style.cssText += ";" + parts.join(";");
+    }
+    this.root.appendChild(el);
+    return el;
+  }
+  make(tag, text) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; return e; }
+
+  title(t, st) { this.add(this.make("h2", t), st); }
+  text(t, st) { this.add(this.make("p", t), st); }
+  label(name, t, st) { const e = this.make("p", t); this.labels.set(name, e); this.add(e, st); }
+  set(name, t) { const e = this.labels.get(name); if (!e) return false; e.textContent = t; return true; }
+  input(name, placeholder, st) {
+    const e = this.make("input"); e.type = "text"; e.placeholder = placeholder;
+    this.inputs.set(name, e); this.add(e, st);
+  }
+  read(name) { const e = this.inputs.get(name); return e ? e.value : null; }
+  button(t, onClick, st) { const e = this.make("button", t); e.addEventListener("click", onClick); this.add(e, st); }
+  image(prompt, st) {
+    const e = this.make("img");
+    e.alt = prompt;
+    e.src = "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?nologo=true";
+    e.onerror = () => { e.alt = "تعذّر تحميل الصورة: " + prompt; };
+    this.add(e, st);
+  }
+  speak(t) {
+    if (typeof speechSynthesis === "undefined") return false;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t); u.lang = "ar";
+    speechSynthesis.speak(u);
+    return true;
+  }
+}
+
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+let current = null;   // نبقي المفسّر حياً بعد انتهاء البرنامج، لأن الأزرار تستدعيه لاحقاً
+
+function runProgram() {
+  const out = document.getElementById("out"), err = document.getElementById("err");
+  const ui = new DomUI(document.getElementById("ui"));
+  const printed = [];
+  const flush = () => { out.textContent = printed.join("\n"); };
+  const showError = e => {
+    if (!e) { err.innerHTML = ""; return; }
+    const known = e instanceof FalconError || e instanceof FalconRuntimeError;
+    err.innerHTML = `<div class="err">${esc(known ? e.message : "خطأ داخلي: " + e.message)}</div>`;
+  };
+  showError(null);
+  ui.clear();
+  try {
+    const ast = parse(document.getElementById("src").value);
+    current = new Interpreter(t => { printed.push(t); flush(); }, ui, showError);
+    current.run(ast);
+  } catch (e) { showError(e); }
+  flush();
+}
+if (typeof document !== "undefined") runProgram();
+
+</script>
+<script>
+if ("serviceWorker" in navigator) {
+  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
+</script>
+</body>
+</html>
